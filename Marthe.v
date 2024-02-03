@@ -13,9 +13,6 @@ Open Scope nat_scope.
     a) Remove axiom TODO  and replace its uses by working code.
     b) Replace all uses of  Admitted by actual proofs. *)
 
-Axiom TODO : forall {A:Type}, A.
-
-
 (** I) Library *)
 
 (** Compararing integers
@@ -58,6 +55,43 @@ Lemma safe_minus_spec a b :
 Proof.
  revert b; induction a; destruct b; simpl; auto with arith.
  specialize (IHa b). destruct (safe_minus a b); auto with arith.
+Qed.
+
+Lemma safe_minus_ge a b :
+  b <= a -> safe_minus a b = Some (a - b).
+Proof.
+  revert b.
+  induction a; destruct b; intro H; try reflexivity.
+  - contradiction (Nat.nle_succ_0 b H).
+  - rewrite Nat.sub_succ.
+      apply IHa.
+      apply le_S_n.
+      apply H.
+Qed.
+
+Lemma safe_minus_lt a b :
+  a < b -> safe_minus a b = None.
+Proof.
+  revert a.
+  induction b; intro a.
+  - intro H.
+    contradiction (Nat.nle_succ_0 a H).
+  - destruct a; intro H.
+    + reflexivity.
+    + apply IHb.
+      apply le_S_n.
+      apply H.
+Qed.
+
+Lemma safe_minus_le_a a b n :
+  safe_minus a b = Some n -> n <= a.
+Proof.
+  revert b.
+  induction a; destruct b; intro H; try (injection H; intro H1; rewrite <- H1; apply Nat.le_refl).
+  - discriminate H.
+  - apply le_S.
+    apply IHa with (b := b).
+    apply H.
 Qed.
 
 (** Accessing the n-th element in a list
@@ -144,6 +178,8 @@ Fixpoint index (s:string) (l:list string) :=
     | nil => 0
     | x::l => if s =? x then 0 else S (index s l)
   end.
+
+Open Scope list_scope.
 
 (** Summation operator : sum f x n = f x + ... + f (x+n).
     Beware, there are  (n+1) terms in this sum...
@@ -242,7 +278,7 @@ Inductive instr :=
   (** Remove a variable from the top of the variables stack.
       Its current value is lost. *)
   | DelVar : instr
-  (** Push a value to the  i-th variable on the stack. *)
+  (** Push a value equal to the  i-th variable on the stack. *)
   | GetVar : nat -> instr
   (** Pop the value on the top of the stack and store it to the 
   i-th variable. *)
@@ -370,7 +406,7 @@ Lemma Stepi_shift instr n m m' :
  Stepi instr m m' ->
  Stepi instr (shift_pc n m) (shift_pc n m').
 Proof.
-  destruct 1; unfold shift_pc; try rewrite -> Nat.add_succ_r with (n := n) (m := pc0); eauto.
+  destruct 1; unfold shift_pc; try rewrite Nat.add_succ_r with (n := n) (m := pc0); eauto.
   rewrite Nat.add_sub_assoc with (n := n) (m := pc0) (p := off).
     - apply SJumpYes.
       + eapply Nat.le_trans; eauto with arith.
@@ -434,7 +470,7 @@ Qed.
     One first shows that if a code adds f(a) to acc and
     increments a, then repeting this  (via a later Jump)
     will add (sum f a (b-a)) to acc.
-    Variable N (of vaue b-a) is the number of loop round 
+    Variable N (of vaue b-a) is the number of loop round
     to make.
 *)
 
@@ -455,7 +491,45 @@ Lemma Steps_jump code n (f:nat->nat) stk vars b :
           (Mach 0 (b::stk) (a::acc::vars))
           (Mach (S n) (b::stk) ((S b)::(acc + sum f a N)::vars)).
 Proof.
-Admitted.
+  intros Hlength Hloop N.
+  apply eq_sym in Hlength.
+  induction N; intros a acc Heqb; simpl sum.
+  - apply Steps_trans with (m2 := Mach n (b::stk) (S a::acc + f a::vars)).
+    + apply Steps_extend.
+      apply Hloop.
+    + apply SomeSteps with (m2 := Mach (S n) (b::stk) (S b::acc + f a::vars)).
+      * unfold Step.
+        simpl pc.
+        rewrite get_app_r0.
+          simpl.
+          rewrite Nat.add_0_l in Heqb.
+          rewrite Heqb.
+          apply SJumpNo.
+          apply Nat.le_refl.
+          apply Hlength.
+      * apply NoStep.
+  - rewrite Nat.add_succ_l in Heqb.
+    rewrite <- Nat.add_succ_r in Heqb.
+    rewrite Nat.add_assoc.
+    apply Steps_trans with (m2 := Mach 0 (b::stk) (S a::acc + f a::vars)).
+    + apply Steps_trans with (m2 := Mach n (b::stk) (S a::acc + f a::vars)).
+      * apply Steps_extend.
+        apply Hloop.
+      * apply SomeSteps with (m2 := Mach 0 (b::stk) (S a::acc + f a::vars)).
+          unfold Step.
+          simpl pc.
+          rewrite get_app_r0.
+            simpl.
+            rewrite <- Nat.sub_diag with (n := n).
+            apply SJumpYes.
+              apply Nat.le_refl.
+              rewrite Heqb.
+              apply Nat.le_add_l.
+            apply Hlength.
+          apply NoStep.
+    + apply IHN.
+      apply Heqb.
+Qed.
 
 (** Specialized version of the previous result, with
     Exec instead of Step, and 0 as initial value for loop variables
@@ -470,8 +544,17 @@ Lemma Exec_jump code (f:nat->nat) stk vars b :
       (b::stk, 0::0::vars)
       (b::stk, (S b)::(sum f 0 b)::vars).
 Proof.
-Admitted.
-
+  intro H.
+  unfold Exec.
+  rewrite app_length.
+  simpl.
+  rewrite Nat.add_1_r.
+  apply Steps_jump with (code := code) (n := length code) (f := f) (stk := stk) (vars := vars) (b := b) (a := 0) (acc := 0).
+  - reflexivity.
+  - apply H.
+  - symmetry.
+    apply Nat.add_0_r.
+Qed.
 
 (** IV) The compiler
 
@@ -490,13 +573,13 @@ Admitted.
 Fixpoint comp (cenv:list string) e :=
   match e with
     | EInt n => Push n :: nil
-    | EVar v => TODO
-    | EOp o e1 e2 => TODO
-    | ESum v efin ecorps =>
-      let prologue := TODO in
-      let corps := TODO in
-      let boucle := corps ++ Jump TODO :: nil in
-      let epilogue := TODO in
+    | EVar v => GetVar (index v cenv * 2) :: nil
+    | EOp o e1 e2 => comp cenv e1 ++ comp cenv e2 ++ Op o :: nil
+    | ESum v e1 e2 =>
+      let prologue := (comp cenv e1) ++ NewVar :: NewVar :: nil in
+      let corps := (comp (v::cenv) e2) ++ GetVar 1 :: Op Plus :: SetVar 1 :: GetVar 0 :: Push 1 :: Op Plus :: SetVar 0 :: nil in
+      let boucle := corps ++ Jump (length corps) :: nil in
+      let epilogue := Pop :: GetVar 1 :: DelVar :: DelVar :: nil in
       prologue ++ boucle ++ epilogue
   end.
 
@@ -505,8 +588,11 @@ Definition compile e := comp nil e.
 (** Free variables in an expression *)
 
 Inductive FV (v:var) : expr -> Prop :=
-| FVVar : FV v (EVar v).
-(* TODO : ajouter les règles manquantes... *)
+| FVVar : FV v (EVar v)
+| FVOpl op e1 e2 : FV v e1 -> FV v (EOp op e1 e2)
+| FVOpr op e1 e2 : FV v e2 -> FV v (EOp op e1 e2)
+| FVSumfin v' e1 e2 : FV v e1 -> FV v (ESum v' e1 e2)
+| FVSumcorps v' e1 e2 : (v =? v') = false -> FV v e2 -> FV v (ESum v' e1 e2).
 
 Global Hint Constructors FV : core.
 
@@ -528,8 +614,30 @@ Lemma EnvsOk_ESum v e1 e2 env cenv vars a b :
   EnvsOk (ESum v e1 e2) env cenv vars ->
   EnvsOk e2 ((v,a)::env) (v::cenv) (a::b::vars).
 Proof.
-Admitted.
-
+  unfold EnvsOk.
+  intros H v' HFV.
+  split; destruct (Bool.bool_dec (v' =? v) true).
+  - apply String.eqb_eq in e.
+    rewrite e.
+    apply in_eq.
+  - apply in_cons.
+    apply H.
+    apply FVSumcorps.
+    apply Bool.not_true_iff_false.
+    apply n.
+    apply HFV.
+  - simpl.
+    rewrite e.
+    reflexivity.
+  - simpl.
+    apply Bool.not_true_iff_false in n.
+    rewrite n.
+    simpl.
+    apply H.
+    apply FVSumcorps.
+    + apply n.
+    + apply HFV.
+Qed.
 
 (** Compiler correctness *)
 
@@ -546,11 +654,61 @@ Theorem comp_ok e env cenv vars stk :
  EnvsOk e env cenv vars ->
  Exec (comp cenv e) (stk,vars) (eval env e :: stk, vars).
 Proof.
-Admitted.
+  revert stk vars env cenv.
+  induction e; intros stk vars env cenv H.
+  - basic_exec.
+  - basic_exec.
+    apply H.
+    apply FVVar.
+  - simpl.
+    apply Exec_trans with (stk2 := eval env e1 :: stk) (vars2 := vars).
+    + apply IHe1.
+      unfold EnvsOk.
+      intros v Hv.
+      apply H.
+      apply FVOpl.
+      apply Hv.
+    + apply Exec_trans with (stk2 := eval env e2 :: eval env e1 :: stk) (vars2 := vars).
+      * apply IHe2.
+        unfold EnvsOk.
+        intros v Hv.
+        apply H.
+        apply FVOpr.
+        apply Hv.
+      * basic_exec.
+  - simpl eval.
+    simpl comp.
+    apply Exec_trans with (code1 := comp cenv e1 ++ NewVar :: NewVar :: nil) (stk2 := eval env e1 :: stk) (vars2 := 0 :: 0 :: vars).
+    + apply Exec_trans with (stk2 := eval env e1 :: stk) (vars2 := vars).
+      apply IHe1.
+      * unfold EnvsOk.
+        intros v0 Hv0.
+        apply H.
+        apply FVSumfin.
+        apply Hv0.
+      * basic_exec.
+    + apply Exec_trans with (stk2 := eval env e1 :: stk) (vars2 := S (eval env e1) :: sum (fun x => eval ((v, x) :: env) e2) 0 (eval env e1) :: vars).
+      * apply Exec_jump.
+        intros a acc.
+        apply Exec_trans with (stk2 := eval ((v,a)::env) e2 :: eval env e1 :: stk) (vars2 := a :: acc :: vars).
+          apply IHe2.
+          apply EnvsOk_ESum with (e1 := e1).
+          apply H.
+          basic_exec.
+          simpl.
+          rewrite Nat.add_1_r.
+          rewrite Nat.add_comm.
+          reflexivity.
+      * basic_exec.
+Qed.
 
 Theorem compile_ok e : Closed e -> Run (compile e) (eval nil e).
 Proof.
-Admitted.
+  intro H.
+  apply comp_ok.
+  intros v H1.
+  contradiction (H v H1).
+Qed.
 
 (** V) Executable semantics
 
@@ -560,6 +718,8 @@ Admitted.
 
 (** This part is much harder that the previous one and
 it is optional. *)
+
+Open Scope nat_scope.
 
 Inductive step_result : Type :=
   | More : machine -> step_result (* calcul en cours *)
@@ -596,23 +756,32 @@ Definition step code (m:machine) : step_result :=
     | None => Stop m
     | Some instr => match instr with
       | Push n => more (n::stk) vars
-      | Pop => TODO
-      | Op o => TODO
-      | NewVar => TODO
-      | DelVar => TODO
-      | GetVar i => TODO
-      | SetVar i => TODO
-      | Jump off => TODO
+      | Pop => stk ::> (fun x stk => more stk vars)
+      | Op o => stk ::> (fun y stk => stk ::> (fun x stk => more (eval_op o x y :: stk) vars))
+      | NewVar => more stk (0 :: vars)
+      | DelVar => vars ::> (fun v vars => more stk vars)
+      | GetVar i => list_get vars i >>= (fun v => more (v :: stk) vars)
+      | SetVar i => stk ::> (fun x stk => option_bind (list_set vars i x) (fun vars => more stk vars))
+      | Jump off => stk ::> (fun x _ => vars ::> (fun v _ =>
+                      if v <=? x then
+                        safe_minus pc off >>= (fun pc => More (Mach pc stk vars))
+                      else
+                       more stk vars
+                      ))
       end
     end.
 
 (** The [steps] function iterates [step] [count] many times
     (or less if [Stop _] or [Bug] are reached before...). *)
 
-Fixpoint steps count (code:list instr)(m:machine) :=
+Fixpoint steps count (code : list instr) (m : machine) :=
   match count with
     | 0 => More m
-    | S count' => TODO
+    | S count' => match step code m with
+                    | More m' => steps count' code m'
+                    | Stop m' => Stop m'
+                    | Bug => Bug
+                  end
   end.
 
 (** Function [run] executes a certain code from the initial
@@ -622,8 +791,14 @@ Fixpoint steps count (code:list instr)(m:machine) :=
     execution or in the end state (eg. empty final stack,
     non empty final variables, etc). *)
 
-Definition run (count:nat)(code : list instr) : option nat :=
-  TODO.
+Definition run (count : nat) (code : list instr) : option nat :=
+  match steps count code (Mach 0 nil nil) with
+    | Stop m => match m with
+                  | Mach _ (x :: nil) nil => Some x
+                  | _ => None
+                end
+    | _ => None
+  end.
 
 Compute (run 1000 (compile test1)). (* expected value: Some 385 *)
 Compute (run 1000 (compile test2)). (* expected value: Some 1705 *)
@@ -632,10 +807,327 @@ Compute (run 1000 (compile test2)). (* expected value: Some 1705 *)
 
 (** TODO: in this part, you have to step yourself the intermediate results. *)
 
+Lemma step_equiv code (m1 m2 : machine) :
+  Step code m1 m2 <-> step code m1 = More m2.
+Proof.
+  unfold Step.
+  remember (list_get code (pc m1)) as i.
+  destruct i.
+  - split.
+    + destruct 1; simpl pc in Heqi; unfold step; rewrite <- Heqi;
+      try simpl list_bind; try simpl option_bind; try rewrite H; try reflexivity.
+      * rewrite (proj2 (Nat.leb_le v x) H0).
+        rewrite (safe_minus_ge pc0 off H).
+        reflexivity.
+      * rewrite (proj2 (Nat.leb_gt v x) H).
+        reflexivity.
+    + destruct m1.
+      simpl pc in Heqi.
+      unfold step.
+      rewrite <- Heqi.
+      destruct i.
+      * injection 1.
+        intro H1.
+        rewrite <- H1.
+        apply SPush.
+      * destruct stack0; simpl list_bind.
+          discriminate 1.
+          injection 1.
+          intro H1.
+          rewrite <- H1.
+          apply SPop.
+      * destruct stack0; simpl list_bind.
+          discriminate 1.
+          destruct stack0; simpl list_bind.
+            discriminate 1.
+            injection 1.
+            intro H1.
+            rewrite <- H1.
+            apply SOp.
+      * injection 1.
+        intro H1.
+        rewrite <- H1.
+        apply SNewVar.
+      * destruct vars0; simpl list_bind.
+          discriminate 1.
+          injection 1.
+          intro H1.
+          rewrite <- H1.
+          apply SDelVar.
+      * remember (list_get vars0 n) as vi.
+        destruct vi; simpl option_bind.
+          injection 1.
+          intro H1.
+          rewrite <- H1.
+          apply SGetVar.
+          symmetry.
+          apply Heqvi.
+          discriminate 1.
+      * destruct stack0; simpl list_bind.
+          discriminate 1.
+          remember (list_set vars0 n n0) as vars1.
+          destruct vars1; simpl option_bind.
+            injection 1.
+            intro H1.
+            rewrite <- H1.
+            apply SSetVar.
+            symmetry.
+            apply Heqvars1.
+            discriminate 1.
+      * destruct stack0; simpl list_bind.
+          discriminate 1.
+          destruct vars0; simpl list_bind.
+            discriminate 1.
+              destruct (Nat.le_gt_cases n1 n0).
+                rewrite (proj2 (Nat.leb_le n1 n0) H).
+                destruct (Nat.le_gt_cases n pc0).
+                  rewrite (safe_minus_ge pc0 n H0).
+                  simpl option_bind.
+                  injection 1.
+                  intro H2.
+                  rewrite <- H2.
+                  apply SJumpYes.
+                    apply H0.
+                    apply H.
+                  rewrite (safe_minus_lt pc0 n H0).
+                  simpl option_bind.
+                  discriminate 1.
+                rewrite (proj2 (Nat.leb_gt n1 n0) H).
+                  injection 1.
+                  intro H1.
+                  rewrite <- H1.
+                  apply SJumpNo.
+                  apply H.
+  - split.
+    + intro H. contradiction H.
+    + destruct m1.
+      simpl pc in Heqi.
+      unfold step.
+      rewrite <- Heqi.
+      discriminate 1.
+Qed.
+
+Lemma steps_equiv code m1 m2 :
+  Steps code m1 m2 <-> exists count, steps count code m1 = More m2.
+Proof.
+  split; intro H.
+  - induction H.
+    + exists 0.
+      reflexivity.
+    + destruct IHSteps.
+      exists (S x).
+      simpl steps.
+      rewrite (proj1 (step_equiv code m1 m2) H).
+      apply H1.
+  - destruct H.
+    revert m1 H.
+    induction x; intro m1.
+    + injection 1.
+      intro H1.
+      rewrite <- H1.
+      apply NoStep.
+    + simpl steps.
+      remember (step code m1) as m.
+      destruct m; try discriminate 1.
+      intro H.
+      apply SomeSteps with (m2 := m).
+        * apply step_equiv.
+          symmetry.
+          apply Heqm.
+        * apply IHx.
+          apply H.
+Qed.
+
+Lemma steps_trans count1 count2 code m1 m2 :
+  steps count1 code m1 = More m2 -> steps (count1+count2) code m1 = steps count2 code m2.
+Proof.
+  revert m1.
+  induction count1; intro m1.
+  - simpl.
+    injection 1.
+    intro H1.
+    rewrite <- H1.
+    reflexivity.
+  - simpl.
+    remember (step code m1) as m.
+    destruct m; try discriminate 1.
+    apply IHcount1.
+Qed.
+
+Lemma step_pc_S code m1 m2 :
+  step code m1 = More m2 -> pc m2 <= S (pc m1).
+Proof.
+  destruct m1.
+  unfold step.
+  destruct (list_get code pc0).
+  - destruct i.
+    + injection 1.
+      intro H1.
+      rewrite <- H1.
+      apply Nat.le_refl.
+    + destruct stack0; simpl list_bind.
+      * discriminate 1.
+      * injection 1.
+        intro H1.
+        rewrite <- H1.
+        apply Nat.le_refl.
+    + destruct stack0; simpl list_bind.
+      * discriminate 1.
+      * destruct stack0; simpl list_bind.
+          discriminate 1.
+          injection 1.
+          intro H1.
+          rewrite <- H1.
+          apply Nat.le_refl.
+    + injection 1.
+      intro H1.
+      rewrite <- H1.
+      apply Nat.le_refl.
+    + destruct vars0; simpl list_bind.
+      * discriminate 1.
+      * injection 1.
+        intro H1.
+        rewrite <- H1.
+        apply Nat.le_refl.
+    + destruct (list_get vars0 n); simpl option_bind.
+      * injection 1.
+        intro H1.
+        rewrite <- H1.
+        apply Nat.le_refl.
+      * discriminate 1.
+    + destruct stack0; simpl list_bind.
+      * discriminate 1.
+      * destruct (list_set vars0 n n0); simpl option_bind.
+          injection 1.
+          intro H1.
+          rewrite <- H1.
+          apply Nat.le_refl.
+          discriminate 1.
+    + destruct stack0; simpl list_bind.
+      * discriminate 1.
+      * destruct vars0; simpl list_bind.
+          discriminate 1.
+          destruct (n1 <=? n0).
+            remember (safe_minus pc0 n) as pc1.
+            destruct pc1; simpl option_bind.
+              injection 1.
+              intro H1.
+              rewrite <- H1.
+              apply le_S.
+              apply safe_minus_le_a with (b := n).
+              symmetry.
+              apply Heqpc1.
+              discriminate 1.
+            injection 1.
+            intro H1.
+            rewrite <- H1.
+            apply Nat.le_refl.
+  - discriminate 1.
+Qed.
+
+Lemma stop_equiv code m1 m2 :
+  step code m1 = Stop m2 -> m1 = m2 /\ pc m1 >= length code.
+Proof.
+  destruct m1.
+  unfold step.
+  remember (list_get code pc0) as i.
+  destruct i.
+  - destruct i; try discriminate 1.
+    + destruct stack0; discriminate 1.
+    + destruct stack0; simpl list_bind.
+      * discriminate 1.
+      * destruct stack0; discriminate 1.
+    + destruct vars0; discriminate 1.
+    + destruct (list_get vars0 n); discriminate 1.
+    + destruct stack0; simpl list_bind.
+      * discriminate 1.
+      * destruct (list_set vars0 n n0); discriminate 1.
+    + destruct stack0; simpl list_bind.
+      * discriminate 1.
+      * destruct vars0; simpl list_bind.
+          discriminate 1.
+          destruct (n1 <=? n0).
+            destruct (safe_minus pc0 n); discriminate 1.
+            discriminate 1.
+  - injection 1.
+    intro H1.
+    split.
+    + apply H1.
+    + apply get_None.
+      symmetry.
+      apply Heqi.
+Qed.
+
+Lemma last_step code m pc0 stk0 vars0 :
+  pc m <= length code -> (exists count, steps count code m = Stop (Mach pc0 stk0 vars0)) -> exists count', steps count' code m = More (Mach (length code) stk0 vars0).
+Proof.
+  intros H H0.
+  destruct H0.
+  revert m H H0.
+  induction x.
+  - discriminate 2.
+  - intros m H.
+    simpl steps.
+    destruct (le_lt_eq_dec (pc m) (length code) H).
+    + simpl steps.
+      remember (step code m) as m0.
+      destruct m0.
+      * intro H1.
+        destruct IHx with (m := m0).
+          apply Nat.le_trans with (m := S (pc m)).
+            apply step_pc_S with (code := code).
+            symmetry.
+            apply Heqm0.
+            apply l.
+          apply H1.
+        exists (S x0).
+        simpl steps.
+        rewrite <- Heqm0.
+        apply H0.
+      * contradiction (Nat.nle_succ_diag_l (pc m) (Nat.le_trans (S (pc m)) (length code) (pc m) l (proj2 (stop_equiv code m m0 (eq_sym Heqm0))))).
+      * discriminate 1.
+    + destruct m.
+      unfold step.
+      rewrite (proj2 (get_None code pc1)).
+      * injection 1.
+        intros H1 H2 H3.
+        exists 0.
+        rewrite <- e.
+        rewrite H1.
+        rewrite H2.
+        reflexivity.
+      * rewrite <- e.
+        reflexivity.
+Qed.
+
 Lemma run_equiv code res :
  Run code res <-> exists count, run count code = Some res.
 Proof.
-Admitted.
+  split; intro H.
+  - destruct (proj1 (steps_equiv code (Mach 0 nil nil) (Mach (length code) (res :: nil) nil)) H).
+    exists (x + 1).
+    unfold run.
+    rewrite steps_trans with (m2 := Mach (length code) (res :: nil) nil).
+    simpl.
+    rewrite (proj2 (get_None code (length code)) (Nat.le_refl (length code))).
+    reflexivity.
+    apply H0.
+  - apply steps_equiv.
+    destruct H.
+    unfold run in H.
+    remember (steps x code (Mach 0 nil nil)) as m.
+    destruct m; try discriminate H.
+    destruct m.
+    destruct stack0; try destruct stack0; destruct vars0; try discriminate H.
+    injection H.
+    intro H1.
+    apply last_step with (pc0 := pc0).
+    + apply Nat.le_0_l.
+    + exists x.
+      symmetry.
+      rewrite <- H1.
+      apply Heqm.
+Qed.
 
 (** Here is the  main theorem formulated for run *)
 
@@ -643,4 +1135,8 @@ Theorem run_compile e :
  Closed e ->
  exists count, run count (compile e) = Some (eval nil e).
 Proof.
-Admitted.
+  intro H.
+  apply run_equiv.
+  apply compile_ok.
+  apply H.
+Qed.
